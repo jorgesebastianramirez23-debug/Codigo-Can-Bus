@@ -1,0 +1,132 @@
+TRANSMISOR
+#include <SPI.h>
+#include <mcp_can.h>
+
+#define CS_PIN 10
+
+MCP_CAN CAN(CS_PIN);
+
+void setup() {
+  Serial.begin(9600);
+
+  if (CAN.begin(MCP_ANY, CAN_500KBPS, MCP_16MHZ) != CAN_OK) {
+    Serial.println("CAN FAIL");
+    while (1);
+  }
+
+  CAN.setMode(MCP_NORMAL);
+  Serial.println("CAN OK - TRANSMISOR");
+}
+
+void loop() {
+  int ldr = analogRead(A0);        // LDR
+  int termistor = analogRead(A1); // AO del modulo NTC
+
+  byte data[4];
+  data[0] = highByte(ldr);
+  data[1] = lowByte(ldr);
+  data[2] = highByte(termistor);
+  data[3] = lowByte(termistor);
+
+  CAN.sendMsgBuf(0x100, 0, 4, data);
+
+  delay(300);  // envio constante
+}
+
+
+
+RECEPTOR
+#include <SPI.h>
+#include <Wire.h>
+#include <mcp_can.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <math.h>
+
+#define CS_PIN 10
+
+#define OLED_ADDR 0x3C
+#define ANCHO 128
+#define ALTO 64
+
+// ---- PARAMETROS NTC 10K ----
+#define BETA 3950.0
+#define R0   10000.0
+#define T0   298.15
+#define VCC  5.0
+
+MCP_CAN CAN(CS_PIN);
+Adafruit_SSD1306 display(ANCHO, ALTO, &Wire, -1);
+
+void setup() {
+  Serial.begin(9600);
+
+  if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
+    while (1);
+  }
+
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextSize(1);
+
+  if (CAN.begin(MCP_ANY, CAN_500KBPS, MCP_16MHZ) != CAN_OK) {
+    Serial.println("CAN FAIL");
+    while (1);
+  }
+
+  CAN.setMode(MCP_NORMAL);
+  Serial.println("CAN OK - RECEPTOR");
+}
+
+void loop() {
+
+  if (CAN.checkReceive() == CAN_MSGAVAIL) {
+
+    long unsigned int rxId;
+    unsigned char len;
+    unsigned char buf[8];
+
+    CAN.readMsgBuf(&rxId, &len, buf);
+
+    if (rxId == 0x100 && len >= 4) {
+
+      int ldr = word(buf[0], buf[1]);
+      int adcTemp = word(buf[2], buf[3]);
+
+      // ---- LDR (corregido) ----
+      String estadoLDR;
+      if (ldr > 700) {
+        estadoLDR = "Oscuro";
+      } else if (ldr > 300) {
+        estadoLDR = "Medio";
+      } else {
+        estadoLDR = "Alto";
+      }
+
+      // ---- TERMISTOR NTC ----
+      float voltaje = adcTemp * (VCC / 1023.0);
+      if (voltaje < 0.05) voltaje = 0.05;
+
+      float resistencia = (VCC * R0 / voltaje) - R0;
+      float tempK = 1.0 / ((1.0 / T0) + (1.0 / BETA) * log(resistencia / R0));
+      float tempC = tempK - 273.15;
+
+      // ---- OLED ----
+      display.clearDisplay();
+      display.setCursor(0, 0);
+
+      display.println("SEBASTIAN RAMIREZ");
+      display.println("PROYECTO CAN");
+      display.println("----------------");
+
+      display.print("LDR: ");
+      display.println(estadoLDR);
+
+      display.print("Temp: ");
+      display.print(tempC, 1);
+      display.println(" C");
+
+      display.display();
+    }
+  }
+}
